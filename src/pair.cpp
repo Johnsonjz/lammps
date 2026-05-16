@@ -47,6 +47,13 @@ enum { NONE, RLINEAR, RSQ, BMP };
 static const std::string mixing_rule_names[Pair::SIXTHPOWER + 1] = {"geometric", "arithmetic",
                                                                     "sixthpower"};
 
+static inline double f_m_drbsog(double r, double t, double lambda)
+{
+  const double a = exp(t);
+  return (1.0 / MathConst::MY_PIS) *
+      exp(-r * r * a - 1.0 / (4.0 * lambda * lambda * a) + t / 2.0);
+}
+
 // allocate space for static class instance variable and initialize it
 
 int Pair::instance_total = 0;
@@ -86,9 +93,22 @@ Pair::Pair(LAMMPS *lmp) :
   nextra = 0;
   single_extra = 0;
 
-  ewaldflag = pppmflag = msmflag = dispersionflag = tip4pflag = dipoleflag = spinflag = 0;
+    ewaldflag = pppmflag = msmflag = dispersionflag = tip4pflag = dipoleflag = spinflag =
+      rbsogflag = drbsogflag = 0;
   reinitflag = 1;
   centroidstressflag = CENTROID_SAME;
+
+  b = 0.0;
+  Sigma = 0.0;
+  Mmax = 0;
+  w0 = 0.0;
+  r0 = 0.0;
+  h = 0.0;
+  t_0 = 0.0;
+  M1 = 0.0;
+  M2 = 0.0;
+  w_M2 = 0.0;
+  lambda = 0.0;
 
   atomic_energy_enable = 0;
 
@@ -442,6 +462,43 @@ void Pair::init_tables(double cut_coul, double *cut_respa)
       if (msmflag) {
         ftable[i] = qqrd2e/r * fgamma;
         etable[i] = qqrd2e/r * egamma;
+      } else if (rbsogflag) {
+        const double sigma2 = Sigma * Sigma;
+        const double coef = log(b) / (sigma2 * sqrt(2.0 * MathConst::MY_PI * sigma2));
+
+        double summ = w0 * exp(-r * r / (2.0 * sigma2));
+        for (int j = 1; j < Mmax; j++) {
+          const double bj = pow(b, static_cast<double>(j));
+          summ += (1.0 / pow(b, 3.0 * static_cast<double>(j))) *
+              exp(-r * r / (2.0 * sigma2 * bj * bj));
+        }
+        ftable[i] = qqrd2e * 2.0 * ((1.0 / (2.0 * r * r * r)) - coef * summ);
+
+        double sume = (2.0 * log(b) / sqrt(2.0 * MathConst::MY_PI * sigma2)) * w0 *
+            exp(-r * r / (2.0 * sigma2));
+        for (int j = 1; j < Mmax; j++) {
+          const double bj = pow(b, static_cast<double>(j));
+          sume += (2.0 * log(b) / sqrt(2.0 * MathConst::MY_PI * sigma2)) *
+              (1.0 / bj) * exp(-r * r / (2.0 * sigma2 * bj * bj));
+        }
+        etable[i] = qqrd2e * (1.0 / r - sume);
+      } else if (drbsogflag) {
+        const double exp_r = exp(-r / lambda);
+        ctable[i] = qqrd2e * exp_r / r;
+
+        double sume = h * w_M2 * f_m_drbsog(r, t_0 + M2 * h, lambda);
+        for (int m = -static_cast<int>(M1); m <= static_cast<int>(M2) - 1; m++) {
+          sume += h * f_m_drbsog(r, t_0 + m * h, lambda);
+        }
+        etable[i] = qqrd2e * (exp_r / r - sume);
+
+        double sumF = w_M2 * exp(t_0 + M2 * h) * f_m_drbsog(r, t_0 + M2 * h, lambda);
+        for (int m = -static_cast<int>(M1); m <= static_cast<int>(M2) - 1; m++) {
+          sumF += exp(t_0 + m * h) * f_m_drbsog(r, t_0 + m * h, lambda);
+        }
+        sumF *= -2.0 * h;
+        const double r_F = exp_r * (1.0 + r / lambda) / (r * r * r);
+        ftable[i] = qqrd2e * (r_F + sumF);
       } else {
         ftable[i] = qqrd2e/r * (derfc + MY_ISPI4*grij*expm2);
         etable[i] = qqrd2e/r * derfc;
@@ -538,6 +595,43 @@ void Pair::init_tables(double cut_coul, double *cut_respa)
       if (msmflag) {
         f_tmp = qqrd2e/r * fgamma;
         e_tmp = qqrd2e/r * egamma;
+      } else if (drbsogflag) {
+        const double exp_r = exp(-r / lambda);
+        c_tmp = qqrd2e * exp_r / r;
+
+        double sume = h * w_M2 * f_m_drbsog(r, t_0 + M2 * h, lambda);
+        for (int m = -static_cast<int>(M1); m <= static_cast<int>(M2) - 1; m++) {
+          sume += h * f_m_drbsog(r, t_0 + m * h, lambda);
+        }
+        e_tmp = qqrd2e * (exp_r / r - sume);
+
+        double sumF = w_M2 * exp(t_0 + M2 * h) * f_m_drbsog(r, t_0 + M2 * h, lambda);
+        for (int m = -static_cast<int>(M1); m <= static_cast<int>(M2) - 1; m++) {
+          sumF += exp(t_0 + m * h) * f_m_drbsog(r, t_0 + m * h, lambda);
+        }
+        sumF *= -2.0 * h;
+        const double r_F = exp_r * (1.0 + r / lambda) / (r * r * r);
+        f_tmp = qqrd2e * (r_F + sumF);
+      } else if (rbsogflag) {
+        const double sigma2 = Sigma * Sigma;
+        const double coef = log(b) / (sigma2 * sqrt(2.0 * MathConst::MY_PI * sigma2));
+
+        double summ = w0 * exp(-r * r / (2.0 * sigma2));
+        for (int j = 1; j < Mmax; j++) {
+          const double bj = pow(b, static_cast<double>(j));
+          summ += (1.0 / pow(b, 3.0 * static_cast<double>(j))) *
+              exp(-r * r / (2.0 * sigma2 * bj * bj));
+        }
+        f_tmp = qqrd2e * 2.0 * ((1.0 / (2.0 * r * r * r)) - coef * summ);
+
+        double sume = (2.0 * log(b) / sqrt(2.0 * MathConst::MY_PI * sigma2)) * w0 *
+            exp(-r * r / (2.0 * sigma2));
+        for (int j = 1; j < Mmax; j++) {
+          const double bj = pow(b, static_cast<double>(j));
+          sume += (2.0 * log(b) / sqrt(2.0 * MathConst::MY_PI * sigma2)) *
+              (1.0 / bj) * exp(-r * r / (2.0 * sigma2 * bj * bj));
+        }
+        e_tmp = qqrd2e * (1.0 / r - sume);
       } else {
         f_tmp = qqrd2e/r * (derfc + MY_ISPI4*grij*expm2);
         e_tmp = qqrd2e/r * derfc;

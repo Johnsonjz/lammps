@@ -75,6 +75,8 @@ class Pair : protected Pointers {
   int tip4pflag;         // 1 if compatible with TIP4P solver
   int dipoleflag;        // 1 if compatible with dipole solver
   int spinflag;          // 1 if compatible with spin solver
+  int rbsogflag;         // 1 if compatible with RBSOG solver
+  int drbsogflag;        // 1 if compatible with DRBSOG solver
   int reinitflag;        // 1 if compatible with fix adapt and alike
 
   int centroidstressflag;    // centroid stress compared to two-body stress
@@ -90,6 +92,19 @@ class Pair : protected Pointers {
   int evflag;    // energy,virial settings
   int eflag_either, eflag_global, eflag_atom;
   int vflag_either, vflag_global, vflag_atom, cvflag_atom;
+
+  // Parameters used by custom RBSOG/DRBSOG Coulomb tables.
+  double b;
+  double Sigma;
+  int Mmax;
+  double w0;
+  double r0;
+  double h;
+  double t_0;
+  double M1;
+  double M2;
+  double w_M2;
+  double lambda;
 
   int ncoultablebits;    // size of Coulomb table, accessed by KSpace
   int ndisptablebits;    // size of dispersion table
