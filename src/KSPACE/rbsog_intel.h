@@ -21,8 +21,7 @@ KSpaceStyle(rbsog, RBSOG)
 #define LMP_RBSOG_H
 
 #include "kspace.h"
-#include <immintrin.h> 
-
+#include "rbsog_simd_compat.h"
 namespace LAMMPS_NS {
 
 	class RBSOG : public KSpace {
@@ -42,8 +41,8 @@ namespace LAMMPS_NS {
 		float Gaussian_modify(int, int, int, float, float, float, float, float, float, int, float*);
 		float Gaussian_Fourier_Plus_modify(float, float, float, float, float, float, int, float*);
 		inline float G_sigma(float, float);
-		__m512 Gaussian_Fourier_Plus_AVX(__m512, __m512, __m512, float, float, float, int, float*);
-		// __m512 Gaussian_Fourier_Plus_modify_AVX(__m512, __m512, __m512, float, float, float, int, float*);
+		RBSOGVec Gaussian_Fourier_Plus_AVX(RBSOGVec, RBSOGVec, RBSOGVec, float, float, float, int, float*);
+		// RBSOGVec Gaussian_Fourier_Plus_modify_AVX(RBSOGVec, RBSOGVec, RBSOGVec, float, float, float, int, float*);
 
 	protected:
 		float b;
@@ -67,6 +66,7 @@ namespace LAMMPS_NS {
 		float* sl;
 		float* coef;
 		float* coef_npt;
+		bool use_gpu_accel;
 		double* TimeSet;
 		double* TimeSet_sampling;
 	};

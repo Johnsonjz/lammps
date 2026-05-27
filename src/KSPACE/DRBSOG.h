@@ -13,7 +13,9 @@
 
 #ifdef KSPACE_CLASS
 
+#ifdef LMP_ENABLE_EXPERIMENTAL_DRBSOG
 KSpaceStyle(drbsog, DRBSOG)
+#endif
 #else
 
 #ifndef LMP_DRBSOG_H

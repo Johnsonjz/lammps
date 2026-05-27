@@ -22,6 +22,7 @@ KSpaceStyle(rbsog/tip4p, RBSOGTIP4P)
 
 // #include "kspace.h"
 #include "rbsog_intel.h"
+#include <vector>
 
 namespace LAMMPS_NS {
 
@@ -38,6 +39,17 @@ namespace LAMMPS_NS {
         double alpha;        // geometric factor
     private:
         void find_M(int, int &, int &, double *);
+		std::vector<float> rho_all_cos_cache_;
+		std::vector<float> rho_all_sin_cache_;
+		std::vector<float> fx_gpu_cache_;
+		std::vector<float> fy_gpu_cache_;
+		std::vector<float> fz_gpu_cache_;
+		std::vector<float> kx_direct_cache_;
+		std::vector<float> ky_direct_cache_;
+		std::vector<float> kz_direct_cache_;
+		std::vector<float> coeff_direct_cache_;
+		std::vector<float> rho_direct_cos_cache_;
+		std::vector<float> rho_direct_sin_cache_;
 	};
 
 }

@@ -510,7 +510,7 @@ void PairLJCutTIP4PUser::settings(int narg, char **arg)
 
   coef = log(b) / (Sigma * Sigma * sqrt(2 * MY_PI * Sigma * Sigma));
 
-  TaylorTerms = 4;
+  TaylorTerms = 6;
   TaylorCoeff = new double[TaylorTerms];
   for (int i = 0; i < TaylorTerms; i++)
   {

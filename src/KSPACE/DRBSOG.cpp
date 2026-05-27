@@ -1,3 +1,4 @@
+#ifdef LMP_ENABLE_EXPERIMENTAL_DRBSOG
 /* ----------------------------------------------------------------------
    LAMMPS - Large-scale Atomic/Molecular Massively Parallel Simulator
    https://lammps.sandia.gov/, Sandia National Laboratories
@@ -780,3 +781,4 @@ double DRBSOG::memory_usage()
 {
 
 }
+#endif  // LMP_ENABLE_EXPERIMENTAL_DRBSOG

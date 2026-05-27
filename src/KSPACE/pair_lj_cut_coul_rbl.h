@@ -13,7 +13,9 @@
 
 #ifdef PAIR_CLASS
 
+#ifdef LMP_ENABLE_EXPERIMENTAL_DRBSOG
 PairStyle(lj/cut/coul/rbl, PairLJCutCoulRBL)
+#endif
 
 #else
 

@@ -123,6 +123,8 @@ action pair_lj_cut_dipole_long_gpu.cpp pair_lj_cut_dipole_long.cpp
 action pair_lj_cut_dipole_long_gpu.h pair_lj_cut_dipole_long.cpp
 action pair_lj_cut_tip4p_long_gpu.h pair_lj_cut_tip4p_long.cpp
 action pair_lj_cut_tip4p_long_gpu.cpp pair_lj_cut_tip4p_long.cpp
+action pair_lj_cut_tip4p_useries_gpu.h pair_lj_cut_tip4p_useries.cpp
+action pair_lj_cut_tip4p_useries_gpu.cpp pair_lj_cut_tip4p_useries.cpp
 action pair_lj_smooth_gpu.cpp pair_lj_smooth.cpp
 action pair_lj_smooth_gpu.h pair_lj_smooth.cpp
 action pair_lj_expand_gpu.cpp
@@ -163,6 +165,12 @@ action pair_zbl_gpu.cpp
 action pair_zbl_gpu.h
 action pppm_gpu.cpp pppm.cpp
 action pppm_gpu.h pppm.cpp
+action pppm_tip4p_gpu.cpp pppm_tip4p.cpp
+action pppm_tip4p_gpu.h pppm_tip4p.h
+action rbsog_intel_gpu.cpp rbsog_intel.cpp
+action rbsog_intel_gpu.h rbsog_intel.h
+action rbsog_tip4p_gpu.cpp rbsog_tip4p.cpp
+action rbsog_tip4p_gpu.h rbsog_tip4p.h
 action pair_ufm_gpu.cpp pair_ufm.cpp
 action pair_ufm_gpu.h pair_ufm.h
 

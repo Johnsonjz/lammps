@@ -1,3 +1,4 @@
+#ifdef LMP_ENABLE_EXPERIMENTAL_DRBSOG
 /* ----------------------------------------------------------------------
    LAMMPS - Large-scale Atomic/Molecular Massively Parallel Simulator
    http://lammps.sandia.gov, Sandia National Laboratories
@@ -851,3 +852,4 @@ void* PairLJCutCoulRBL::extract(const char* str, int& dim)
     if (strcmp(str, "sigma") == 0) return (void*)sigma;
     return NULL;
 }
+#endif  // LMP_ENABLE_EXPERIMENTAL_DRBSOG

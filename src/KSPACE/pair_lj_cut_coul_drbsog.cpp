@@ -1,3 +1,4 @@
+#ifdef LMP_ENABLE_EXPERIMENTAL_DRBSOG
 /* ----------------------------------------------------------------------
   LAMMPS - Large-scale Atomic/Molecular Massively Parallel Simulator
   http://lammps.sandia.gov, Sandia National Laboratories
@@ -588,3 +589,4 @@ void PairLJCutCoulDRBSOG::coeff(int narg, char** arg)
 
     if (count == 0) error->all(FLERR, "Incorrect args for pair coefficients");
 }
+#endif  // LMP_ENABLE_EXPERIMENTAL_DRBSOG

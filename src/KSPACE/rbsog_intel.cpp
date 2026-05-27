@@ -17,7 +17,6 @@
 
 #include "rbsog_intel.h"
 #include <mpi.h>
-#include <mathimf.h>
 #include "atom.h"
 #include "comm.h"
 #include "domain.h"
@@ -32,7 +31,6 @@
 #include <stdlib.h>
 
 
-#include <immintrin.h> 
 #include <unistd.h>
 #include <stdexcept>
 #include <cassert>
@@ -43,7 +41,6 @@
 #include <fstream>
 #include <cmath>
 #include <ctime>
-#include <mkl.h>
 #include <random>
 
 using namespace std;
@@ -55,6 +52,18 @@ static std::uniform_real_distribution<double> dis(0, 1);
 static std::uniform_real_distribution<> dis_uniform(-1, 1);
 
 #define SMALL 0.00001
+#ifdef LMP_GPU
+int rbsog_gpu_compute_rho(const int nlocal, const int pcount, const float *x, const float *y,
+                          const float *z, const float *q, const float *kx, const float *ky,
+                          const float *kz, float *rho_cos, float *rho_sin);
+int rbsog_gpu_compute_force_sampled(const int nlocal, const int pcount, const float *x,
+                                    const float *y, const float *z, const float *q,
+                                    const float *kx, const float *ky, const float *kz,
+                                    const float *fac, const float *rho_all_cos,
+                                    const float *rho_all_sin, const float midterm, float *fx,
+                                    float *fy, float *fz);
+#endif
+
 
 
 /* ----------------------------------------------------------------------
@@ -72,6 +81,7 @@ RBSOG::RBSOG(LAMMPS* lmp) : KSpace(lmp)
     // }
     TimeSet_sampling = new double[1000];
     rbsogflag = 1;
+    use_gpu_accel = false;
 }
 
 void RBSOG::settings(int narg, char** arg)
@@ -606,22 +616,22 @@ void RBSOG::compute(int eflag, int vflag)
 
     for (int i = 0; i < P; i+=16)
     {   
-        __m512 Kx, Ky, Kz, Kx0, Ky0, Kz0;
-        __m512 Kx_npt, Ky_npt, Kz_npt, Kx0_npt, Ky0_npt, Kz0_npt;
-        __m512 K2, K2_0, K2_npt, K2_npt_0, K4, K4_0;
-        __m512 Lx_ratio, Ly_ratio, Lz_ratio;
-        __m512 S_ratio, S_npt_ratio;
-        Lx_ratio = _mm512_set1_ps(xprd / xprd0);
-        Ly_ratio = _mm512_set1_ps(yprd / yprd0);
-        Lz_ratio = _mm512_set1_ps(zprd / zprd0);
-        S_ratio = _mm512_set1_ps(S0 / S);
-        S_npt_ratio = _mm512_set1_ps(S_npt0 / S_npt);
-        Kx = _mm512_load_ps(&KxKx0[i]);
-        Ky = _mm512_load_ps(&KxKx1[i]);
-        Kz = _mm512_load_ps(&KxKx2[i]);
-        Kx_npt = _mm512_load_ps(&KxKx0_npt[i]);
-        Ky_npt = _mm512_load_ps(&KxKx1_npt[i]);
-        Kz_npt = _mm512_load_ps(&KxKx2_npt[i]);
+        RBSOGVec Kx, Ky, Kz, Kx0, Ky0, Kz0;
+        RBSOGVec Kx_npt, Ky_npt, Kz_npt, Kx0_npt, Ky0_npt, Kz0_npt;
+        RBSOGVec K2, K2_0, K2_npt, K2_npt_0, K4, K4_0;
+        RBSOGVec Lx_ratio, Ly_ratio, Lz_ratio;
+        RBSOGVec S_ratio, S_npt_ratio;
+        Lx_ratio = rbsog_set1_ps(xprd / xprd0);
+        Ly_ratio = rbsog_set1_ps(yprd / yprd0);
+        Lz_ratio = rbsog_set1_ps(zprd / zprd0);
+        S_ratio = rbsog_set1_ps(S0 / S);
+        S_npt_ratio = rbsog_set1_ps(S_npt0 / S_npt);
+        Kx = rbsog_load_ps(&KxKx0[i]);
+        Ky = rbsog_load_ps(&KxKx1[i]);
+        Kz = rbsog_load_ps(&KxKx2[i]);
+        Kx_npt = rbsog_load_ps(&KxKx0_npt[i]);
+        Ky_npt = rbsog_load_ps(&KxKx1_npt[i]);
+        Kz_npt = rbsog_load_ps(&KxKx2_npt[i]);
         Kx0 = Kx * Lx_ratio;
         Ky0 = Ky * Ly_ratio;
         Kz0 = Kz * Lz_ratio;
@@ -635,18 +645,18 @@ void RBSOG::compute(int eflag, int vflag)
         K4 = K2_npt * K2_npt;
         K4_0 = K2_npt_0 * K2_npt_0;
 
-        __m512 mid, mid0, mid_npt, mid0_npt;
+        RBSOGVec mid, mid0, mid_npt, mid0_npt;
         mid = Gaussian_Fourier_Plus_AVX(Kx, Ky, Kz, sigma, b, w0, Mmax, coef) * K2;
         mid0 = Gaussian_Fourier_Plus_AVX(Kx0, Ky0, Kz0, sigma, b, w0, Mmax, coef) * K2_0;
         mid_npt = Gaussian_Fourier_Plus_AVX(Kx_npt, Ky_npt, Kz_npt, sigma, b, w0, Mmax, coef_npt) * K4;
         mid0_npt = Gaussian_Fourier_Plus_AVX(Kx0_npt, Ky0_npt, Kz0_npt, sigma, b, w0, Mmax, coef_npt) * K4_0;
 
-        __m512 fac_tmp, fac_npt_tmp;
+        RBSOGVec fac_tmp, fac_npt_tmp;
         fac_tmp = S_ratio * mid / mid0;
         fac_npt_tmp = S_npt_ratio * mid_npt / mid0_npt;
 
-        _mm512_store_ps(&fac[i], fac_tmp);
-        _mm512_store_ps(&fac_npt[i], fac_npt_tmp);
+        rbsog_store_ps(&fac[i], fac_tmp);
+        rbsog_store_ps(&fac_npt[i], fac_npt_tmp);
     }
     // if (comm->me == 0 && update->ntimestep % 100 == 0)
     // {
@@ -664,23 +674,32 @@ void RBSOG::compute(int eflag, int vflag)
     //     TimeSet[1][index] = time * 1000;    
     // }
     // time = MPI_Wtime();
-    __m512 Real, Imag, X0, X1, X2, qq, Cos, Sin,
+    RBSOGVec Real, Imag, X0, X1, X2, qq, Cos, Sin,
         Moment, Kx, Ky, Kz;
 
+    bool rho_on_gpu = false;
+#ifdef LMP_GPU
+    if (use_gpu_accel) {
+        if (rbsog_gpu_compute_rho(nlocal, P, X, Y, Z, Q, KxKx0, KxKx1, KxKx2, Rho_Cos, Rho_Sin) == 0)
+            rho_on_gpu = true;
+    }
+#endif
+
+    if (!rho_on_gpu)
     for (int i = 0; i < P; i += 16)
     {
 
-        Real = Imag = _mm512_setzero_ps();
-        Kx = _mm512_load_ps(&KxKx0[i]);
-        Ky = _mm512_load_ps(&KxKx1[i]);
-        Kz = _mm512_load_ps(&KxKx2[i]);
+        Real = Imag = rbsog_setzero_ps();
+        Kx = rbsog_load_ps(&KxKx0[i]);
+        Ky = rbsog_load_ps(&KxKx1[i]);
+        Kz = rbsog_load_ps(&KxKx2[i]);
 
         for (int j = 0; j < nlocal; j++)
         {
-            X0 = _mm512_set1_ps(X[j]);
-            X1 = _mm512_set1_ps(Y[j]);
-            X2 = _mm512_set1_ps(Z[j]);
-            qq = _mm512_set1_ps(Q[j]);
+            X0 = rbsog_set1_ps(X[j]);
+            X1 = rbsog_set1_ps(Y[j]);
+            X2 = rbsog_set1_ps(Z[j]);
+            qq = rbsog_set1_ps(Q[j]);
 
 
            //__mm512 mid0, mid1;
@@ -689,7 +708,7 @@ void RBSOG::compute(int eflag, int vflag)
            // Moment = vfmaq_f32(mid1, Kz, X2);
             Moment = Kx * X0 + Ky * X1 + Kz * X2;
 
-            Sin = _mm512_sincos_ps(&Cos, Moment);
+            Sin = rbsog_sincos_ps(&Cos, Moment);
             //svml128_sincos_f32(Moment, &Sin, &Cos);
 
 
@@ -697,8 +716,8 @@ void RBSOG::compute(int eflag, int vflag)
             Imag = Imag + qq * Sin;
         }
 
-        _mm512_store_ps(&Rho_Cos[i], Real);
-        _mm512_store_ps(&Rho_Sin[i], Imag);
+        rbsog_store_ps(&Rho_Cos[i], Real);
+        rbsog_store_ps(&Rho_Sin[i], Imag);
     }
 
     for (int i = 0; i < P; i++)
@@ -755,19 +774,19 @@ void RBSOG::compute(int eflag, int vflag)
         // }
         sum_real = 0.0;
         sum_imag = 0.0;
-        Kx = _mm512_set1_ps(Kx_Dir[i][0]);
-        Ky = _mm512_set1_ps(Kx_Dir[i][1]);
-        Kz = _mm512_set1_ps(Kx_Dir[i][2]);
-        Real = Imag = _mm512_setzero_ps();
+        Kx = rbsog_set1_ps(Kx_Dir[i][0]);
+        Ky = rbsog_set1_ps(Kx_Dir[i][1]);
+        Kz = rbsog_set1_ps(Kx_Dir[i][2]);
+        Real = Imag = rbsog_setzero_ps();
 
         for (int j = 0; j < nlocal; j += 16)
         {
             // Real = vld1q_f32(&real[0]);
             // Imag = vld1q_f32(&imag[0]);
-            X0 = _mm512_load_ps(&X[j]);
-            X1 = _mm512_load_ps(&Y[j]);
-            X2 = _mm512_load_ps(&Z[j]);
-            qq = _mm512_load_ps(&Q[j]);
+            X0 = rbsog_load_ps(&X[j]);
+            X1 = rbsog_load_ps(&Y[j]);
+            X2 = rbsog_load_ps(&Z[j]);
+            qq = rbsog_load_ps(&Q[j]);
 
             //float32x4_t mid0, mid1;
             //mid0 = vmulq_f32(Kx, X0);
@@ -775,14 +794,14 @@ void RBSOG::compute(int eflag, int vflag)
             //Moment = vfmaq_f32(mid1, Kz, X2);
             Moment = Kx * X0 + Ky * X1 + Kz * X2;
 
-            Sin = _mm512_sincos_ps(&Cos, Moment);
+            Sin = rbsog_sincos_ps(&Cos, Moment);
             //svml128_sincos_f32(Moment, &Sin, &Cos);
 
             Real = Real + qq * Cos;
             Imag = Imag + qq * Sin;
         }
-        sum_real = _mm512_reduce_add_ps(Real);
-        sum_imag = _mm512_reduce_add_ps(Imag);
+        sum_real = rbsog_reduce_add_ps(Real);
+        sum_imag = rbsog_reduce_add_ps(Imag);
         rho[i][0] = sum_real;
         rho[i][1] = sum_imag;
     }
@@ -807,38 +826,61 @@ void RBSOG::compute(int eflag, int vflag)
     // time = MPI_Wtime();
     double MIDTERM = - (S0 / (P + 0.00)) * qqrd2e / V;
 
-    __m512 Fx, Fy, Fz, K2, moment_512, midterm_512, Rho_All_0, Rho_All_1, factor;
+    RBSOGVec Fx, Fy, Fz, K2, moment_512, midterm_512, Rho_All_0, Rho_All_1, factor;
     float F_x[16],F_y[16],F_z[16];
 
+    bool sampled_force_on_gpu = false;
+#ifdef LMP_GPU
+    if (use_gpu_accel) {
+        std::vector<float> rho_all_cos(P), rho_all_sin(P);
+        for (int i = 0; i < P; i++) {
+            rho_all_cos[i] = Rho_All[i][0];
+            rho_all_sin[i] = Rho_All[i][1];
+        }
+        std::vector<float> fx_gpu(nlocal), fy_gpu(nlocal), fz_gpu(nlocal);
+        if (rbsog_gpu_compute_force_sampled(nlocal, P, X, Y, Z, Q, KxKx0, KxKx1, KxKx2, fac,
+                                            rho_all_cos.data(), rho_all_sin.data(), static_cast<float>(MIDTERM),
+                                            fx_gpu.data(), fy_gpu.data(), fz_gpu.data()) == 0) {
+            for (int i = 0; i < nlocal; i++) {
+                F[i][0] += fx_gpu[i];
+                F[i][1] += fy_gpu[i];
+                F[i][2] += fz_gpu[i];
+            }
+            sampled_force_on_gpu = true;
+        }
+    }
+#endif
+
+    if (!sampled_force_on_gpu)
     for (int i = 0; i < nlocal; i += 16)
     {
 
-        X0 = _mm512_load_ps(&X[i]);
-        X1 = _mm512_load_ps(&Y[i]);
-        X2 = _mm512_load_ps(&Z[i]);
-        qq = _mm512_load_ps(&Q[i]);
+        X0 = rbsog_load_ps(&X[i]);
+        X1 = rbsog_load_ps(&Y[i]);
+        X2 = rbsog_load_ps(&Z[i]);
+        qq = rbsog_load_ps(&Q[i]);
 
-        Fx = Fy = Fz = _mm512_setzero_ps();
+        Fx = Fy = Fz = rbsog_setzero_ps();
 
         for (int j = 0; j < P; j++)
         {
 
-            Kx = _mm512_set1_ps(KxKx0[j]);
-            Ky = _mm512_set1_ps(KxKx1[j]);
-            Kz = _mm512_set1_ps(KxKx2[j]);
+            Kx = rbsog_set1_ps(KxKx0[j]);
+            Ky = rbsog_set1_ps(KxKx1[j]);
+            Kz = rbsog_set1_ps(KxKx2[j]);
 
             K2 = Kx * Kx + Ky * Ky + Kz * Kz;
 
             moment_512 = -(Kx * X0 + Ky * X1 + Kz * X2);
 
-            Sin = _mm512_sincos_ps(&Cos, moment_512);
+            Sin = rbsog_sincos_ps(&Cos, moment_512);
 
-            factor = _mm512_set1_ps(fac[j]);
+            factor = rbsog_set1_ps(fac[j]);
 
-            midterm_512 = _mm512_set1_ps(MIDTERM);
+            midterm_512 = rbsog_set1_ps(MIDTERM);
             midterm_512 = factor * midterm_512;
-            Rho_All_0 = _mm512_set1_ps(Rho_All[j][0]);
-            Rho_All_1 = _mm512_set1_ps(Rho_All[j][1]);
+            Rho_All_0 = rbsog_set1_ps(Rho_All[j][0]);
+            Rho_All_1 = rbsog_set1_ps(Rho_All[j][1]);
 
             Imag = (Cos * Rho_All_1 + Sin * Rho_All_0) * midterm_512 / K2;
 
@@ -848,9 +890,9 @@ void RBSOG::compute(int eflag, int vflag)
         }
 
 
-        _mm512_store_ps(&F_x[0], Fx);
-        _mm512_store_ps(&F_y[0], Fy);
-        _mm512_store_ps(&F_z[0], Fz);
+        rbsog_store_ps(&F_x[0], Fx);
+        rbsog_store_ps(&F_y[0], Fy);
+        rbsog_store_ps(&F_z[0], Fz);
 
         for (int j = 0; j < 16; j++) {
             F[i + j][0] = F[i + j][0] + F_x[j];
@@ -887,26 +929,26 @@ void RBSOG::compute(int eflag, int vflag)
     //     cout << "The rho_All = " << rho_All[0][0] << " " << rho_All[0][1] << endl;
     // }
 
-    __m512 rho_All_0, rho_All_1;
+    RBSOGVec rho_All_0, rho_All_1;
     // float F_xx[4],F_yy[4],F_zz[4];
     float MID = - qqrd2e / V;
 
     for (int m = 0; m < nlocal; m += 16)
     {
-        X0 = _mm512_load_ps(&X[m]);
-        X1 = _mm512_load_ps(&Y[m]);
-        X2 = _mm512_load_ps(&Z[m]);
-        qq = _mm512_load_ps(&Q[m]);
-        Fx = Fy = Fz = _mm512_setzero_ps();
+        X0 = rbsog_load_ps(&X[m]);
+        X1 = rbsog_load_ps(&Y[m]);
+        X2 = rbsog_load_ps(&Z[m]);
+        qq = rbsog_load_ps(&Q[m]);
+        Fx = Fy = Fz = rbsog_setzero_ps();
         for (int i = 0; i < index; i++)
         {
-            Kx = _mm512_set1_ps(Kx_Dir[i][0]);
-            Ky = _mm512_set1_ps(Kx_Dir[i][1]);
-            Kz = _mm512_set1_ps(Kx_Dir[i][2]);
-            Real = Imag = _mm512_setzero_ps();
-            __m512 f_b_sigma = _mm512_set1_ps(F_b_sigma[i]);
-            __m512 coeff = _mm512_set1_ps(MID);
-            //__m512 mmid0, mmid1;
+            Kx = rbsog_set1_ps(Kx_Dir[i][0]);
+            Ky = rbsog_set1_ps(Kx_Dir[i][1]);
+            Kz = rbsog_set1_ps(Kx_Dir[i][2]);
+            Real = Imag = rbsog_setzero_ps();
+            RBSOGVec f_b_sigma = rbsog_set1_ps(F_b_sigma[i]);
+            RBSOGVec coeff = rbsog_set1_ps(MID);
+            //RBSOGVec mmid0, mmid1;
             // Kx2 = vmulq_f32(Kx, Kx);
             // Ky2 = vfmaq_f32(Kx2, Ky, Ky);
             // K2 = vfmaq_f32(Ky2, Kz, Kz);
@@ -917,14 +959,14 @@ void RBSOG::compute(int eflag, int vflag)
             //moment_128 = vnegq_f32(moment_128);
             moment_512 = -(Kx * X0 + Ky * X1 + Kz * X2);
 
-            Sin = _mm512_sincos_ps(&Cos, moment_512);
+            Sin = rbsog_sincos_ps(&Cos, moment_512);
             //svml128_sincos_f32(moment_128, &Sin, &Cos);
 
             //midterm_128 = vmulq_f32(f_b_sigma, coeff);
             midterm_512 = f_b_sigma * coeff;
 
-            rho_All_0 = _mm512_set1_ps(rho_All[i][0]);
-            rho_All_1 = _mm512_set1_ps(rho_All[i][1]);
+            rho_All_0 = rbsog_set1_ps(rho_All[i][0]);
+            rho_All_1 = rbsog_set1_ps(rho_All[i][1]);
 
             //float32x4_t imag_cos, imag_temp;
             //imag_cos = vmulq_f32(Cos, rho_All_1);
@@ -941,9 +983,9 @@ void RBSOG::compute(int eflag, int vflag)
             Fy = Fy + qq * Imag * Ky;
             Fz = Fz + qq * Imag * Kz;
         }
-        _mm512_store_ps(&F_x[0], Fx);
-        _mm512_store_ps(&F_y[0], Fy);
-        _mm512_store_ps(&F_z[0], Fz);
+        rbsog_store_ps(&F_x[0], Fx);
+        rbsog_store_ps(&F_y[0], Fy);
+        rbsog_store_ps(&F_z[0], Fz);
 
         for (int j = 0; j < 16; j++) {
             F[m + j][0] = F[m + j][0] + F_x[j];
@@ -1204,20 +1246,20 @@ float RBSOG::Gaussian_Fourier_Plus_modify(float Kx, float Ky, float Kz, float si
     return sum;
 }
 
-__m512 RBSOG::Gaussian_Fourier_Plus_AVX(__m512 Kx, __m512 Ky, __m512 Kz, float sigma, float b, float w0, int Mmax, float* coef)
+RBSOGVec RBSOG::Gaussian_Fourier_Plus_AVX(RBSOGVec Kx, RBSOGVec Ky, RBSOGVec Kz, float sigma, float b, float w0, int Mmax, float* coef)
 {
-    __m512 k2 = Kx * Kx + Ky * Ky + Kz * Kz;
-    __m512 sum = _mm512_setzero_ps();
-    __m512 sigma2 = _mm512_set1_ps( -sigma * sigma * 0.5);
-    __m512 b2 = _mm512_set1_ps(b * b);
+    RBSOGVec k2 = Kx * Kx + Ky * Ky + Kz * Kz;
+    RBSOGVec sum = rbsog_setzero_ps();
+    RBSOGVec sigma2 = rbsog_set1_ps( -sigma * sigma * 0.5);
+    RBSOGVec b2 = rbsog_set1_ps(b * b);
     for (int i = 0; i < Mmax; i++)
     {
-        __m512 index = _mm512_set1_ps(i);
-        __m512 coef_i = _mm512_set1_ps(coef[i]);
-        __m512 b_2i = _mm512_pow_ps(b2, index);
-        __m512 mid = _mm512_mul_ps(b_2i, sigma2);
-        mid = _mm512_mul_ps(mid, k2);
-        __m512 exp = _mm512_exp_ps(mid);
+        RBSOGVec index = rbsog_set1_ps(i);
+        RBSOGVec coef_i = rbsog_set1_ps(coef[i]);
+        RBSOGVec b_2i = rbsog_pow_ps(b2, index);
+        RBSOGVec mid = rbsog_mul_ps(b_2i, sigma2);
+        mid = rbsog_mul_ps(mid, k2);
+        RBSOGVec exp = rbsog_exp_ps(mid);
         sum = sum + coef_i * exp;
     }
     return sum;
