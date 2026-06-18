@@ -152,6 +152,29 @@ ucl_inline numtyp user_short_sum(const numtyp rsq, const numtyp b,
 }
 
 /* ----------------------------------------------------------------------
+   Force analogue of user_short_sum.
+   The force correction = 2*energy_coef*inv_2sigma2 * sum_j fw_j * exp(-rsq*inv_2sigma2_j)
+   where fw_0 = w0, fw_j = 1/b^(3j) for j>0.
+   This replaces the Taylor expansion (user_taylor_poly) for better float accuracy.
+---------------------------------------------------------------------- */
+ucl_inline numtyp user_short_force_sum(const numtyp rsq, const numtyp b,
+                                        const numtyp inv_2sigma2,
+                                        const numtyp energy_coef,
+                                        const numtyp w0, const int mmax) {
+  const numtyp pref = (numtyp)2.0 * energy_coef * inv_2sigma2;
+  numtyp sum = pref * w0 * ucl_exp(-rsq * inv_2sigma2);
+  numtyp inv_b = ucl_recip(b);
+  numtyp inv_b3_pow = inv_b * inv_b * inv_b; // 1/b^3
+  numtyp inv_b2_pow = inv_b * inv_b;         // 1/b^2
+  for (int j = 1; j < mmax; j++) {
+    sum += pref * inv_b3_pow * ucl_exp(-rsq * inv_2sigma2 * inv_b2_pow);
+    inv_b3_pow *= inv_b * inv_b * inv_b;
+    inv_b2_pow *= inv_b * inv_b;
+  }
+  return sum;
+}
+
+/* ----------------------------------------------------------------------
    Compute resulting forces (ans), energies and virial (engv).
    An additional term is calculated based on the previously
    calculated values on the virlual sites (ansO),
@@ -476,8 +499,8 @@ __kernel void k_lj_tip4p_user(const __global numtyp4 *restrict x_,
           numtyp rinv = r2inv * r;
           numtyp r3inv = rinv * r2inv;
           numtyp prefactor = qqrd2e * qtmp * qj;
-          numtyp poly = user_taylor_poly(taylor, rsq);
-          numtyp force_coul = prefactor * (poly + special_coul * r3inv);
+          numtyp force_corr = user_short_force_sum(rsq, b, inv_2sigma2, energy_coef, w0, mmax);
+          numtyp force_coul = prefactor * (special_coul * r3inv - force_corr);
 
           if (itype == typeO) {
             fO.x += delx * force_coul;
@@ -568,8 +591,8 @@ __kernel void k_lj_tip4p_user(const __global numtyp4 *restrict x_,
             numtyp rinv = r2inv * r;
             numtyp r3inv = rinv * r2inv;
             numtyp prefactor = qqrd2e * x1m.w * qj;
-            numtyp poly = user_taylor_poly(taylor, rsq);
-            numtyp force_coul = prefactor * (poly + special_coul * r3inv);
+            numtyp force_corr = user_short_force_sum(rsq, b, inv_2sigma2, energy_coef, w0, mmax);
+            numtyp force_coul = prefactor * (special_coul * r3inv + force_corr);
 
             numtyp cO = (numtyp)1 - alpha, cH = (numtyp)0.5*alpha;
             numtyp4 fd;
@@ -810,8 +833,8 @@ __kernel void k_lj_tip4p_user_fast(const __global numtyp4 *restrict x_,
           numtyp rinv = r2inv * r;
           numtyp r3inv = rinv * r2inv;
           numtyp prefactor = qqrd2e * qtmp * qj;
-          numtyp poly = user_taylor_poly(taylor, rsq);
-          numtyp force_coul = prefactor * (poly + special_coul * r3inv);
+          numtyp force_corr = user_short_force_sum(rsq, b, inv_2sigma2, energy_coef, w0, mmax);
+          numtyp force_coul = prefactor * (special_coul * r3inv - force_corr);
 
           if (itype == typeO) {
             fO.x += delx * force_coul;
@@ -902,8 +925,8 @@ __kernel void k_lj_tip4p_user_fast(const __global numtyp4 *restrict x_,
             numtyp rinv = r2inv * r;
             numtyp r3inv = rinv * r2inv;
             numtyp prefactor = qqrd2e * x1m.w * qj;
-            numtyp poly = user_taylor_poly(taylor, rsq);
-            numtyp force_coul = prefactor * (poly + special_coul * r3inv);
+            numtyp force_corr = user_short_force_sum(rsq, b, inv_2sigma2, energy_coef, w0, mmax);
+            numtyp force_coul = prefactor * (special_coul * r3inv + force_corr);
 
             numtyp cO = (numtyp)1.0 - alpha, cH = (numtyp)0.5*alpha;
             numtyp4 fd;
