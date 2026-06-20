@@ -119,7 +119,7 @@ void FastSOGTIP4PGPU::compute(int eflag, int vflag)
   const float delxinv = static_cast<float>(static_cast<double>(mesh_nx) / mesh_lx);
   const float delyinv = static_cast<float>(static_cast<double>(mesh_ny) / mesh_ly);
   const float delzinv = static_cast<float>(static_cast<double>(mesh_nz) / mesh_lz);
-  const float xi_param = static_cast<float>((spline_type == 4) ? kCubes2Xi4 : kCubes2Xi4);
+  const float xi_param = static_cast<float>((spline_type == 4) ? kCubes2Xi4 : kCubes2Xi6);
 
   const size_t ngrid = mesh_rho.size();
 

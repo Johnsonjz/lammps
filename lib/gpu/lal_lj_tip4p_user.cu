@@ -592,7 +592,7 @@ __kernel void k_lj_tip4p_user(const __global numtyp4 *restrict x_,
             numtyp r3inv = rinv * r2inv;
             numtyp prefactor = qqrd2e * x1m.w * qj;
             numtyp force_corr = user_short_force_sum(rsq, b, inv_2sigma2, energy_coef, w0, mmax);
-            numtyp force_coul = prefactor * (special_coul * r3inv + force_corr);
+            numtyp force_coul = prefactor * (special_coul * r3inv - force_corr);
 
             numtyp cO = (numtyp)1 - alpha, cH = (numtyp)0.5*alpha;
             numtyp4 fd;
@@ -926,7 +926,7 @@ __kernel void k_lj_tip4p_user_fast(const __global numtyp4 *restrict x_,
             numtyp r3inv = rinv * r2inv;
             numtyp prefactor = qqrd2e * x1m.w * qj;
             numtyp force_corr = user_short_force_sum(rsq, b, inv_2sigma2, energy_coef, w0, mmax);
-            numtyp force_coul = prefactor * (special_coul * r3inv + force_corr);
+            numtyp force_coul = prefactor * (special_coul * r3inv - force_corr);
 
             numtyp cO = (numtyp)1.0 - alpha, cH = (numtyp)0.5*alpha;
             numtyp4 fd;
