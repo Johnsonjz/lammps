@@ -152,10 +152,10 @@ ucl_inline numtyp user_short_sum(const numtyp rsq, const numtyp b,
 }
 
 /* ----------------------------------------------------------------------
-   Force analogue of user_short_sum.
-   The force correction = 2*energy_coef*inv_2sigma2 * sum_j fw_j * exp(-rsq*inv_2sigma2_j)
-   where fw_0 = w0, fw_j = 1/b^(3j) for j>0.
-   This replaces the Taylor expansion (user_taylor_poly) for better float accuracy.
+   Force correction: hybrid approach matching CPU two-path logic.
+   - rsq <= tabinnersq (default 2.0): Taylor polynomial (CPU line 293)
+   - rsq >  tabinnersq: exact Gaussian sum (replaces CPU Coulomb table)
+   GPU bridge forces ncoultablebits=0; exact sum compensates for missing table.
 ---------------------------------------------------------------------- */
 ucl_inline numtyp user_short_force_sum(const numtyp rsq, const numtyp b,
                                         const numtyp inv_2sigma2,
@@ -499,8 +499,13 @@ __kernel void k_lj_tip4p_user(const __global numtyp4 *restrict x_,
           numtyp rinv = r2inv * r;
           numtyp r3inv = rinv * r2inv;
           numtyp prefactor = qqrd2e * qtmp * qj;
-          numtyp force_corr = user_short_force_sum(rsq, b, inv_2sigma2, energy_coef, w0, mmax);
-          numtyp force_coul = prefactor * (special_coul * r3inv - force_corr);
+          numtyp force_coul;
+          if (rsq < (numtyp)2.0)
+            force_coul = prefactor * (special_coul * r3inv + user_taylor_poly(taylor, rsq));
+          else {
+            numtyp force_corr = user_short_force_sum(rsq, b, inv_2sigma2, energy_coef, w0, mmax);
+            force_coul = prefactor * (special_coul * r3inv - force_corr);
+          }
 
           if (itype == typeO) {
             fO.x += delx * force_coul;
@@ -591,8 +596,13 @@ __kernel void k_lj_tip4p_user(const __global numtyp4 *restrict x_,
             numtyp rinv = r2inv * r;
             numtyp r3inv = rinv * r2inv;
             numtyp prefactor = qqrd2e * x1m.w * qj;
+            numtyp force_coul;
+          if (rsq < (numtyp)2.0)
+            force_coul = prefactor * (special_coul * r3inv + user_taylor_poly(taylor, rsq));
+          else {
             numtyp force_corr = user_short_force_sum(rsq, b, inv_2sigma2, energy_coef, w0, mmax);
-            numtyp force_coul = prefactor * (special_coul * r3inv - force_corr);
+            force_coul = prefactor * (special_coul * r3inv - force_corr);
+          }
 
             numtyp cO = (numtyp)1 - alpha, cH = (numtyp)0.5*alpha;
             numtyp4 fd;
@@ -833,8 +843,13 @@ __kernel void k_lj_tip4p_user_fast(const __global numtyp4 *restrict x_,
           numtyp rinv = r2inv * r;
           numtyp r3inv = rinv * r2inv;
           numtyp prefactor = qqrd2e * qtmp * qj;
-          numtyp force_corr = user_short_force_sum(rsq, b, inv_2sigma2, energy_coef, w0, mmax);
-          numtyp force_coul = prefactor * (special_coul * r3inv - force_corr);
+          numtyp force_coul;
+          if (rsq < (numtyp)2.0)
+            force_coul = prefactor * (special_coul * r3inv + user_taylor_poly(taylor, rsq));
+          else {
+            numtyp force_corr = user_short_force_sum(rsq, b, inv_2sigma2, energy_coef, w0, mmax);
+            force_coul = prefactor * (special_coul * r3inv - force_corr);
+          }
 
           if (itype == typeO) {
             fO.x += delx * force_coul;
@@ -925,8 +940,13 @@ __kernel void k_lj_tip4p_user_fast(const __global numtyp4 *restrict x_,
             numtyp rinv = r2inv * r;
             numtyp r3inv = rinv * r2inv;
             numtyp prefactor = qqrd2e * x1m.w * qj;
+            numtyp force_coul;
+          if (rsq < (numtyp)2.0)
+            force_coul = prefactor * (special_coul * r3inv + user_taylor_poly(taylor, rsq));
+          else {
             numtyp force_corr = user_short_force_sum(rsq, b, inv_2sigma2, energy_coef, w0, mmax);
-            numtyp force_coul = prefactor * (special_coul * r3inv - force_corr);
+            force_coul = prefactor * (special_coul * r3inv - force_corr);
+          }
 
             numtyp cO = (numtyp)1.0 - alpha, cH = (numtyp)0.5*alpha;
             numtyp4 fd;

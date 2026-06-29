@@ -60,6 +60,7 @@ class FastSOG : public KSpace {
   // ── Spline / grid method selection ──
   int spline_type;       // 0 = B-spline order 5 (legacy), 4 = CubeS2 4th, 6 = CubeS2 6th
   int grid_method;       // 0 = SOG bandwidth (new), 1 = PPPM iteration (legacy)
+  double phi_max_user;   // user-specified φ_max override (>0 means active, −1 = auto)
 
   // ── Computed from SOG params + cutoff ──
   double w0;             // real-space correction factor (only on m=0 term)

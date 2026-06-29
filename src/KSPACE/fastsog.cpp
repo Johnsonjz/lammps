@@ -178,10 +178,11 @@ struct CubeS2NodeMonomial {
   MonomialTerm terms[kMaxMonomialsPerNode];
 };
 
-// Precompute monomial expansion for all 32 nodes
-// η_k = a_k + b_k·θ_k where a_k = dx_k, b_k = 1-2·dx_k
-// c_d(θ) = L(η_x)·η_y·η_z + L(η_y)·η_x·η_z + L(η_z)·η_x·η_y
-// L(t) = -½t³ + ½t² - ξ²_adj·t + ξ²/2  where ξ²_adj = (9ξ²-2)/6
+// Precompute monomial expansion for all 32 nodes.
+// Class-0 nodes (offsets in {0,1}³): c_d = L(ηx)·ηy·ηz + cyclic.
+// Class-1 nodes (one offset -1 or 2): c_d = R(η_special) · η_n1 · η_n2.
+// L(t) = -½t³ + ½t² - ξ²_adj·t + ξ²/2
+// R(t) =  ⅙t³ + (3ξ²-1)/6·t      (paper Eq. 15-16)
 inline void build_monomials_for_node(const CubeS2Node4 &node, const double xi,
                                       CubeS2NodeMonomial &result) {
   result.num_terms = 0;
@@ -194,10 +195,6 @@ inline void build_monomials_for_node(const CubeS2Node4 &node, const double xi,
                         1.0 - 2.0 * a[2]};
 
   const double xi2 = xi * xi;
-  const double xi2_adj = (9.0 * xi2 - 2.0) / 6.0;
-
-  // L coefficients: c3=-0.5, c2=0.5, c1=-xi2_adj, c0=xi2/2
-  const double L_coeffs[4] = {-0.5, 0.5, -xi2_adj, 0.5 * xi2};
 
   // Binomial coefficients C(n,k)
   auto binom = [](int n, int k) -> double {
@@ -212,39 +209,84 @@ inline void build_monomials_for_node(const CubeS2Node4 &node, const double xi,
     return C[n][k];
   };
 
-  // For each of the 3 cyclic terms in c_d
-  for (int term_idx = 0; term_idx < 3; ++term_idx) {
-    // term_idx: 0 = L(η0)·η1·η2, 1 = L(η1)·η2·η0, 2 = L(η2)·η0·η1
-    int axis_L = term_idx;
-    int axis_n1 = (term_idx + 1) % 3;
-    int axis_n2 = (term_idx + 2) % 3;
+  if (node.cls == 0) {
+    // Class 0: c_d = L(ηx)·ηy·ηz + L(ηy)·ηz·ηx + L(ηz)·ηx·ηy
+    const double xi2_adj = (9.0 * xi2 - 2.0) / 6.0;
+    const double L_coeffs[4] = {0.5 * xi2, -xi2_adj, 0.5, -0.5};
+
+    for (int term_idx = 0; term_idx < 3; ++term_idx) {
+      int axis_L = term_idx;
+      int axis_n1 = (term_idx + 1) % 3;
+      int axis_n2 = (term_idx + 2) % 3;
+
+      for (int pL = 0; pL <= 3; ++pL) {
+        const double c_L = L_coeffs[pL];
+        if (c_L == 0.0) continue;
+        for (int jL = 0; jL <= pL; ++jL) {
+          const double cf_L = c_L * binom(pL, jL) *
+            std::pow(a[axis_L], static_cast<double>(pL - jL)) *
+            std::pow(b[axis_L], static_cast<double>(jL));
+          for (int jn1 = 0; jn1 <= 1; ++jn1) {
+            const double cf_n1 = binom(1, jn1) *
+              std::pow(a[axis_n1], static_cast<double>(1 - jn1)) *
+              std::pow(b[axis_n1], static_cast<double>(jn1));
+            for (int jn2 = 0; jn2 <= 1; ++jn2) {
+              const double cf_n2 = binom(1, jn2) *
+                std::pow(a[axis_n2], static_cast<double>(1 - jn2)) *
+                std::pow(b[axis_n2], static_cast<double>(jn2));
+              const double coeff = cf_L * cf_n1 * cf_n2;
+              if (coeff == 0.0) continue;
+              int pows[3] = {0, 0, 0};
+              pows[axis_L] = jL;
+              pows[axis_n1] = jn1;
+              pows[axis_n2] = jn2;
+              bool merged = false;
+              for (int m = 0; m < result.num_terms; ++m) {
+                if (result.terms[m].px == pows[0] &&
+                    result.terms[m].py == pows[1] &&
+                    result.terms[m].pz == pows[2]) {
+                  result.terms[m].coeff += coeff;
+                  merged = true;
+                  break;
+                }
+              }
+              if (!merged && result.num_terms < kMaxMonomialsPerNode) {
+                result.terms[result.num_terms] = {pows[0], pows[1], pows[2], coeff};
+                result.num_terms++;
+              }
+            }
+          }
+        }
+      }
+    }
+  } else {
+    // Class 1: c_d = R(η_special) · η_n1 · η_n2  (single term, paper Eq. 16)
+    const double R_coeffs[4] = {0.0, (3.0 * xi2 - 1.0) / 6.0, 0.0, 1.0 / 6.0};
+    int axis_L = node.sp_axis;
+    int axis_n1 = (axis_L + 1) % 3;
+    int axis_n2 = (axis_L + 2) % 3;
 
     for (int pL = 0; pL <= 3; ++pL) {
-      const double c_L = L_coeffs[pL];
-      if (c_L == 0.0) continue;
-      // Expand η_L^pL
+      const double c_R = R_coeffs[pL];
+      if (c_R == 0.0) continue;
       for (int jL = 0; jL <= pL; ++jL) {
-        const double cf_L = c_L * binom(pL, jL) *
+        const double cf_L = c_R * binom(pL, jL) *
           std::pow(a[axis_L], static_cast<double>(pL - jL)) *
           std::pow(b[axis_L], static_cast<double>(jL));
-        // Expand η_n1^1
         for (int jn1 = 0; jn1 <= 1; ++jn1) {
           const double cf_n1 = binom(1, jn1) *
             std::pow(a[axis_n1], static_cast<double>(1 - jn1)) *
             std::pow(b[axis_n1], static_cast<double>(jn1));
-          // Expand η_n2^1
           for (int jn2 = 0; jn2 <= 1; ++jn2) {
             const double cf_n2 = binom(1, jn2) *
               std::pow(a[axis_n2], static_cast<double>(1 - jn2)) *
               std::pow(b[axis_n2], static_cast<double>(jn2));
             const double coeff = cf_L * cf_n1 * cf_n2;
             if (coeff == 0.0) continue;
-            // Powers: axis_L gets jL, axis_n1 gets jn1, axis_n2 gets jn2
             int pows[3] = {0, 0, 0};
             pows[axis_L] = jL;
             pows[axis_n1] = jn1;
             pows[axis_n2] = jn2;
-            // Add or merge monomial
             bool merged = false;
             for (int m = 0; m < result.num_terms; ++m) {
               if (result.terms[m].px == pows[0] &&
@@ -337,6 +379,7 @@ FastSOG::FastSOG(LAMMPS *lmp)
       mesh_alias_extent(kAliasExtent),
       spline_type(4),         // default: CubeS₂ 4th order
       grid_method(0),         // default: SOG‑bandwidth grid estimation
+      phi_max_user(-1.0),    // −1 = auto-compute from paper Table III
       w0(0.0),
       self_coeff(0.0),
       mesh_nx(0),
@@ -383,6 +426,7 @@ void FastSOG::settings(int narg, char **arg) {
   mesh_alias_extent = kAliasExtent;
   spline_type = 4;   // CubeS₂ 4th
   grid_method = 0;   // SOG bandwidth
+  phi_max_user = -1.0;  // auto-compute
 
   // Parse optional 5th argument: n_dl or first option keyword
   int iarg = 4;
@@ -449,6 +493,13 @@ void FastSOG::settings(int narg, char **arg) {
         grid_method = 1;
       else
         error->all(FLERR, "fastsog grid_method expects sog_bandwidth or pppm_legacy");
+      iarg += 2;
+    } else if (key == "phi_max") {
+      if (iarg + 1 >= narg)
+        error->all(FLERR, "fastsog missing phi_max value");
+      phi_max_user = atof(arg[iarg + 1]);
+      if (!(phi_max_user > 0.0))
+        error->all(FLERR, "fastsog phi_max must be > 0");
       iarg += 2;
     } else {
       error->all(FLERR, "Unknown fastsog option: {}", key);
@@ -674,19 +725,31 @@ void FastSOG::ensure_fft_plan() {
   int nx, ny, nz;
 
   if (grid_method == 0 && spline_type > 0) {
-    // ── SOG-bandwidth grid estimation (new) ──
-    // φ_max from midtown-sog.md Table III:
-    //   CubeS₂ 4th, b=2: φ_max = 0.23
-    //   CubeS₂ 6th, b=2: φ_max = 0.35
-    // General formula: Δ = φ_max · r_c
-    double phi_max = 0.23;  // default CubeS2 4th
-    if (spline_type == 6) {
-      phi_max = 0.35;       // CubeS2 6th
+    // ── SOG-bandwidth grid estimation ──
+    // φ_max from midtown-sog.md Table III (paper JCP 153, 224117):
+    //   CubeS₂ 4th, b=2:      φ_max = 0.23
+    //   CubeS₂ 4th, b≈1.630:  φ_max = 0.065
+    //   CubeS₂ 6th, b=2:      φ_max = 0.35
+    //   CubeS₂ 6th, b≈1.630:  φ_max = 0.160
+    // Linear interpolation between tabulated b values; floor at b=1.63,
+    // cap at b=2.0 to stay within paper's validated range.
+    double phi_max;
+    if (phi_max_user > 0.0) {
+      phi_max = phi_max_user;  // explicit user override
+    } else {
+      const double b_ref_lo = 1.6297670882677647;  // paper's b≈1.63
+      const double phi_lo = (spline_type == 6) ? 0.160 : 0.065;
+      const double b_ref_hi = 2.0;
+      const double phi_hi = (spline_type == 6) ? 0.350 : 0.230;
+      if (b_param <= b_ref_lo) {
+        phi_max = phi_lo;
+      } else if (b_param >= b_ref_hi) {
+        phi_max = phi_hi;
+      } else {
+        phi_max = phi_lo + (b_param - b_ref_lo) / (b_ref_hi - b_ref_lo) *
+                                (phi_hi - phi_lo);
+      }
     }
-    // Scale phi_max slightly with b_param: larger b means narrower Gaussians,
-    // which need finer grid relative to rcut
-    const double b_factor = std::sqrt(std::log(b_param) / std::log(2.0));
-    phi_max /= b_factor;
 
     const double delta = phi_max * rcut;
     nx = std::max(kGridMin, static_cast<int>(std::ceil(lx / delta)));
