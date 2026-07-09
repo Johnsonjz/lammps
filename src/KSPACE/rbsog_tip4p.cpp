@@ -927,7 +927,7 @@ void RBSOGTIP4P::compute(int eflag, int vflag)
         if (eflag_global) {
 			float KXX[3];
             // double coeff = 0.5 * w0 + logf(b) * (1 - powf(b, -Mmax)) / (sqrtf(2 * MY_PI) * sigma * (b - 1));
-            double coeff = (logf(b)/(sqrtf(2 * MY_PI) * sigma)) * (w0 + (1 - powf(b, -Mmax)) / (b - 1));
+            double coeff = (logf(b)/(sqrtf(2 * MY_PI) * sigma)) * (w0 + (1 - powf(b, -(Mmax - 1))) / (b - 1));
 			for (int i = 0; i < P; i++)
 			{
 				KXX[0] = K[i][0];

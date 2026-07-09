@@ -209,12 +209,13 @@ void RBSOG::init()
 
     for (int i = 1; i < Mmax; ++i) {
         sl[i] = sl[i-1] * b;
-        if( i == 1){
-            coef[i] = 4 * MY_PI * log(b) * sigma2* b2;
+        if (i == 1) {
+            coef[i] = 4 * MY_PI * log(b) * sigma2 * b2;
             coef_npt[i] = 8 * MY_PI * log(b) * sigma4 * b4;
+        } else {
+            coef[i] = coef[i-1] * b2;
+            coef_npt[i] = coef_npt[i-1] * b4;
         }
-        coef[i] = coef[i-1] * b2;
-        coef_npt[i] = coef_npt[i-1] * b4;
     }
     setup();
 }
@@ -1060,7 +1061,7 @@ void RBSOG::compute(int eflag, int vflag)
         if (eflag_global) {
 			float KXX[3];
             // double coeff = 0.5 * w0 + logf(b) * (1 - powf(b, -Mmax)) / (sqrtf(2 * MY_PI) * sigma * (b - 1));
-            double coeff = (logf(b)/(sqrtf(2 * MY_PI) * sigma)) * (w0 + (1 - powf(b, -Mmax)) / (b - 1));
+            double coeff = (logf(b)/(sqrtf(2 * MY_PI) * sigma)) * (w0 + (1 - powf(b, -(Mmax - 1))) / (b - 1));
 			for (int i = 0; i < P; i++)
 			{
 				KXX[0] = K[i][0];
