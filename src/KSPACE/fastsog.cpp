@@ -1109,7 +1109,19 @@ void FastSOG::precompute_green_functions() {
   const int alias_extent = mesh_alias_extent;
   const int alias_cnt = 2 * alias_extent + 1;
 
-  // Alias fast-path check
+  // ── CubeS₂ variance-subtraction Green function (paper Eq. 70) ──
+  // G(k) = K(k²)·exp(+Σ_α σ_{s,α}² k_α²), σ_{s,α} = ξ₀·Δ_α. Analytic, stable
+  // deconvolution of the CubeS₂ Gaussian spread. (Dividing by the spline
+  // influence |Φ|² is unstable for the non-convolutional window; not used.)
+  double sig_sx2 = 0.0, sig_sy2 = 0.0, sig_sz2 = 0.0;
+  if (spline_type >= 4) {
+    const double xi_cs2 = (spline_type == 4) ? kCubes2Xi4 : kCubes2Xi6;
+    sig_sx2 = (xi_cs2 * mesh_lx / mesh_nx) * (xi_cs2 * mesh_lx / mesh_nx);
+    sig_sy2 = (xi_cs2 * mesh_ly / mesh_ny) * (xi_cs2 * mesh_ly / mesh_ny);
+    sig_sz2 = (xi_cs2 * mesh_lz / mesh_nz) * (xi_cs2 * mesh_lz / mesh_nz);
+  }
+
+  // Alias fast-path check (legacy B-spline path)
   const double k_max = std::sqrt(k_sq_max);
   const bool alias_fast_path =
       (twopi_over_x * static_cast<double>(mesh_nx) > 2.0 * k_max) &&
@@ -1134,15 +1146,14 @@ void FastSOG::precompute_green_functions() {
         const size_t idx = mesh_index(ix, iy, iz);
 
         if (spline_type >= 4) {
-          // ── CubeS₂ Green function (alias fast path) ──
+          // ── CubeS₂ Green function (variance-subtraction, Form B) ──
           const double kfac = spectral_kernel(sqk);
-          const double inf_sq = cubes2_influence_sq[idx];
-          if (!(inf_sq > 1e-20) || !std::isfinite(inf_sq)) continue;
-
-          mesh_green_energy[idx] = kfac / inf_sq;
-          mesh_green_force[idx] = kfac / inf_sq;  // alias fast path
+          const double deconv =
+              std::exp(sig_sx2 * kx * kx + sig_sy2 * ky * ky + sig_sz2 * kz * kz);
+          mesh_green_energy[idx] = kfac * deconv;
+          mesh_green_force[idx] = kfac * deconv;
           mesh_green_self[idx] = kfac;
-          mesh_green_virial[idx] = spectral_kernel_virial(sqk) / inf_sq;
+          mesh_green_virial[idx] = spectral_kernel_virial(sqk) * deconv;
           continue;
         }
 
@@ -1332,8 +1343,18 @@ void FastSOG::compute(int eflag, int vflag) {
           const size_t idx = mesh_index(igx, igy, igz);
           mesh_rho[idx] += static_cast<FFT_SCALAR>(q_scaled * w);
         }
+      } else {  // spline_type == 6 (88-node CubeS₂)
+        for (int k = 0; k < kCubes2NumNodes6; ++k) {
+          const auto &node = kCubes2Nodes6[k];
+          const double w = cubes2_weight_6(tx, ty, tz, node, xi);
+          if (w == 0.0) continue;
+          const int igx = wrap_index(ix0 + node.dx, mesh_nx);
+          const int igy = wrap_index(iy0 + node.dy, mesh_ny);
+          const int igz = wrap_index(iz0 + node.dz, mesh_nz);
+          const size_t idx = mesh_index(igx, igy, igz);
+          mesh_rho[idx] += static_cast<FFT_SCALAR>(q_scaled * w);
+        }
       }
-      // 6th order placeholder — will be filled when 88-node set is defined
     }
   } else {
     // Legacy B-spline charge spreading (order 5)
@@ -1474,7 +1495,6 @@ void FastSOG::compute(int eflag, int vflag) {
 
   // ── Force interpolation ──
   const double qscale = force->qqrd2e * scale;
-  std::array<double, 6> virial_local = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
   if (spline_type >= 4) {
     // CubeS₂ force interpolation
@@ -1511,8 +1531,20 @@ void FastSOG::compute(int eflag, int vflag) {
           gy += w * static_cast<double>(mesh_grady[2 * idx]);
           gz += w * static_cast<double>(mesh_gradz[2 * idx]);
         }
+      } else {  // spline_type == 6 (88-node CubeS₂)
+        for (int k = 0; k < kCubes2NumNodes6; ++k) {
+          const auto &node = kCubes2Nodes6[k];
+          const double w = cubes2_weight_6(tx, ty, tz, node, xi);
+          if (w == 0.0) continue;
+          const int igx = wrap_index(ix0 + node.dx, mesh_nx);
+          const int igy = wrap_index(iy0 + node.dy, mesh_ny);
+          const int igz = wrap_index(iz0 + node.dz, mesh_nz);
+          const size_t idx = mesh_index(igx, igy, igz);
+          gx += w * static_cast<double>(mesh_gradx[2 * idx]);
+          gy += w * static_cast<double>(mesh_grady[2 * idx]);
+          gz += w * static_cast<double>(mesh_gradz[2 * idx]);
+        }
       }
-      // 6th order placeholder
 
       const double qi = q[i];
       const double fxs = -qscale * qi * gx;
@@ -1522,15 +1554,6 @@ void FastSOG::compute(int eflag, int vflag) {
       atom->f[i][0] += fxs;
       atom->f[i][1] += fys;
       atom->f[i][2] += fzs;
-
-      if (want_virial) {
-        virial_local[0] += x[i][0] * fxs;
-        virial_local[1] += x[i][1] * fys;
-        virial_local[2] += x[i][2] * fzs;
-        virial_local[3] += x[i][0] * fys;
-        virial_local[4] += x[i][0] * fzs;
-        virial_local[5] += x[i][1] * fzs;
-      }
     }
   } else {
     // Legacy B-spline force interpolation
@@ -1585,15 +1608,6 @@ void FastSOG::compute(int eflag, int vflag) {
       atom->f[i][0] += fxs;
       atom->f[i][1] += fys;
       atom->f[i][2] += fzs;
-
-      if (want_virial) {
-        virial_local[0] += x[i][0] * fxs;
-        virial_local[1] += x[i][1] * fys;
-        virial_local[2] += x[i][2] * fzs;
-        virial_local[3] += x[i][0] * fys;
-        virial_local[4] += x[i][0] * fzs;
-        virial_local[5] += x[i][1] * fzs;
-      }
     }
   }
 
@@ -1623,36 +1637,13 @@ void FastSOG::compute(int eflag, int vflag) {
 
   // ── Virial ──
   if (want_virial) {
-    double vr_all[6] = {0.0}, vf_all[6] = {0.0};
-
-    // Force·r virial (diagnostic only)
-    MPI_Allreduce(virial_local.data(), vr_all, 6, MPI_DOUBLE, MPI_SUM, world);
+    double vf_all[6] = {0.0};
 
     // Fourier-space virial (primary, matches rbsog_intel & PPPM convention)
     MPI_Allreduce(fv_local.data(), vf_all, 6, MPI_DOUBLE, MPI_SUM, world);
     // Scale Fourier virial: W = 0.5 * V * qscale * Σ s2 * |ρ|² * (ge·I - gv·k⊗k)
     const double virial_scale = 0.5 * volume * qscale;
     for (int j = 0; j < 6; ++j) virial[j] = virial_scale * vf_all[j];
-
-    // Diagnostic: compare force·r vs Fourier virial
-    double max_rel_diff = 0.0;
-    for (int j = 0; j < 6; ++j) {
-      double denom = std::max(std::fabs(vr_all[j]), std::fabs(virial[j]));
-      if (denom > 0.0) {
-        double rd = std::fabs(vr_all[j] - virial[j]) / denom;
-        if (rd > max_rel_diff) max_rel_diff = rd;
-      }
-    }
-    if (comm->me == 0 && max_rel_diff > 0.0001) {
-      std::string msg = fmt::format(
-          "  FastSOG virial: max |force·r - Fourier|/max = {:.6f}\n"
-          "    force·r: {:12.4f} {:12.4f} {:12.4f} {:12.4f} {:12.4f} {:12.4f}\n"
-          "    Fourier: {:12.4f} {:12.4f} {:12.4f} {:12.4f} {:12.4f} {:12.4f}\n",
-          max_rel_diff,
-          vr_all[0], vr_all[1], vr_all[2], vr_all[3], vr_all[4], vr_all[5],
-          virial[0], virial[1], virial[2], virial[3], virial[4], virial[5]);
-      utils::logmesg(lmp, msg);
-    }
   }
 }
 
