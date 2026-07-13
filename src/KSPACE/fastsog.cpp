@@ -1419,6 +1419,10 @@ void FastSOG::compute(int eflag, int vflag) {
   double energy_local = 0.0;
   double diag_sum_local = 0.0;
   std::array<double, 6> fv_local = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  // Anisotropic self-energy stress accumulator: Σ_mesh K_v(k²)·k_α k_β. With diag_sum (Σ K) it forms
+  // the strain-derivative of the reciprocal self-removal −qscale·qsqsum·Σ K/(2V) that the reciprocal
+  // virial omits (fixes the ~2.5 %→~0.5 % diagonal/shear). Mirrors deepmd-kit sog.cpp.
+  std::array<double, 6> sv_local = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
   for (int iz = 0; iz < mesh_nz; ++iz) {
     const int kz_mode = iz - mesh_nz * (2 * iz / mesh_nz);
@@ -1473,6 +1477,16 @@ void FastSOG::compute(int eflag, int vflag) {
           fv_local[3] += s2 * rho2 * (-gv * kx * ky);
           fv_local[4] += s2 * rho2 * (-gv * kx * kz);
           fv_local[5] += s2 * rho2 * (-gv * ky * kz);
+          // Anisotropic self-energy stress: Σ bare K_v(k²)·k_α k_β (config-independent, combined with
+          // diag_sum in the virial finalize). spectral_kernel_virial(sqk) = bare K_v (no window).
+          const double sqk = kx * kx + ky * ky + kz * kz;
+          const double kv_bare = spectral_kernel_virial(sqk);
+          sv_local[0] += kv_bare * kx * kx;
+          sv_local[1] += kv_bare * ky * ky;
+          sv_local[2] += kv_bare * kz * kz;
+          sv_local[3] += kv_bare * kx * ky;
+          sv_local[4] += kv_bare * kx * kz;
+          sv_local[5] += kv_bare * ky * kz;
         }
 
         const double vk_re = scaleinv * geff * rho_re;
@@ -1644,6 +1658,26 @@ void FastSOG::compute(int eflag, int vflag) {
     // Scale Fourier virial: W = 0.5 * V * qscale * Σ s2 * |ρ|² * (ge·I - gv·k⊗k)
     const double virial_scale = 0.5 * volume * qscale;
     for (int j = 0; j < 6; ++j) virial[j] = virial_scale * vf_all[j];
+
+    // Self-energy strain-derivative (the omitted term, ~2.5 %→~0.5 %; mirrors deepmd-kit sog.cpp):
+    //   W_self_αβ = (qscale·qsqsum/2V)·(Σ K_v·k_α k_β − δ_αβ·Σ K),  Σ K_v k_α k_β = sv_all, Σ K = diag_sum.
+    if (remove_self_interaction) {
+      double sv_all[6] = {0.0};
+      MPI_Allreduce(sv_local.data(), sv_all, 6, MPI_DOUBLE, MPI_SUM, world);
+      double diag_sum_all_v = 0.0;
+      MPI_Allreduce(&diag_sum_local, &diag_sum_all_v, 1, MPI_DOUBLE, MPI_SUM, world);
+      double qsqsum_local_v = 0.0;
+      for (int i = 0; i < nlocal; ++i) qsqsum_local_v += q[i] * q[i];
+      double qsqsum_all_v = 0.0;
+      MPI_Allreduce(&qsqsum_local_v, &qsqsum_all_v, 1, MPI_DOUBLE, MPI_SUM, world);
+      const double self_pref = qscale * qsqsum_all_v / (2.0 * volume);
+      virial[0] += self_pref * (sv_all[0] - diag_sum_all_v);
+      virial[1] += self_pref * (sv_all[1] - diag_sum_all_v);
+      virial[2] += self_pref * (sv_all[2] - diag_sum_all_v);
+      virial[3] += self_pref * sv_all[3];
+      virial[4] += self_pref * sv_all[4];
+      virial[5] += self_pref * sv_all[5];
+    }
   }
 }
 
