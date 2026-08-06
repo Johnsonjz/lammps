@@ -391,6 +391,29 @@
     add_arg(a26); add_arg(a27); add_arg(a28); add_arg(a29); add_arg(a30);
   }
 
+  template <class t1, class t2, class t3, class t4, class t5,
+            class t6, class t7, class t8, class t9, class t10,
+            class t11, class t12, class t13, class t14, class t15,
+            class t16, class t17, class t18, class t19, class t20,
+            class t21, class t22, class t23, class t24, class t25,
+            class t26, class t27, class t28, class t29, class t30,
+            class t31>
+  inline void add_args(t1 *a1, t2 *a2, t3 *a3, t4 *a4, t5 *a5,
+                       t6 *a6, t7 *a7, t8 *a8, t9 *a9, t10 *a10,
+                       t11 *a11, t12 *a12, t13 *a13, t14 *a14, t15 *a15,
+                       t16 *a16, t17 *a17, t18 *a18, t19 *a19, t20 *a20,
+                       t21 *a21, t22 *a22, t23 *a23, t24 *a24, t25 *a25,
+                       t26 *a26, t27 *a27, t28 *a28, t29 *a29, t30 *a30,
+                       t31 *a31) {
+    add_arg(a1); add_arg(a2); add_arg(a3); add_arg(a4); add_arg(a5);
+    add_arg(a6); add_arg(a7); add_arg(a8); add_arg(a9); add_arg(a10);
+    add_arg(a11); add_arg(a12); add_arg(a13); add_arg(a14); add_arg(a15);
+    add_arg(a16); add_arg(a17); add_arg(a18); add_arg(a19); add_arg(a20);
+    add_arg(a21); add_arg(a22); add_arg(a23); add_arg(a24); add_arg(a25);
+    add_arg(a26); add_arg(a27); add_arg(a28); add_arg(a29); add_arg(a30);
+    add_arg(a31);
+  }
+
 
 // ---------------------------------------------------------------------------
 
@@ -826,5 +849,55 @@
     add_arg(a16); add_arg(a17); add_arg(a18); add_arg(a19); add_arg(a20);
     add_arg(a21); add_arg(a22); add_arg(a23); add_arg(a24); add_arg(a25);
     add_arg(a26); add_arg(a27); add_arg(a28); add_arg(a29); add_arg(a30);
+    run();
+  }
+
+  template <class t1, class t2, class t3, class t4, class t5,
+            class t6, class t7, class t8, class t9, class t10,
+            class t11, class t12, class t13, class t14, class t15,
+            class t16, class t17, class t18, class t19, class t20,
+            class t21, class t22, class t23, class t24, class t25,
+            class t26, class t27, class t28, class t29, class t30,
+            class t31>
+  inline void run(t1 *a1, t2 *a2, t3 *a3, t4 *a4, t5 *a5,
+                       t6 *a6, t7 *a7, t8 *a8, t9 *a9, t10 *a10,
+                       t11 *a11, t12 *a12, t13 *a13, t14 *a14, t15 *a15,
+                       t16 *a16, t17 *a17, t18 *a18, t19 *a19, t20 *a20,
+                       t21 *a21, t22 *a22, t23 *a23, t24 *a24, t25 *a25,
+                       t26 *a26, t27 *a27, t28 *a28, t29 *a29, t30 *a30,
+                       t31 *a31) {
+    clear_args();
+    add_arg(a1); add_arg(a2); add_arg(a3); add_arg(a4); add_arg(a5);
+    add_arg(a6); add_arg(a7); add_arg(a8); add_arg(a9); add_arg(a10);
+    add_arg(a11); add_arg(a12); add_arg(a13); add_arg(a14); add_arg(a15);
+    add_arg(a16); add_arg(a17); add_arg(a18); add_arg(a19); add_arg(a20);
+    add_arg(a21); add_arg(a22); add_arg(a23); add_arg(a24); add_arg(a25);
+    add_arg(a26); add_arg(a27); add_arg(a28); add_arg(a29); add_arg(a30);
+    add_arg(a31);
+    run();
+  }
+
+  template <class t1, class t2, class t3, class t4, class t5,
+            class t6, class t7, class t8, class t9, class t10,
+            class t11, class t12, class t13, class t14, class t15,
+            class t16, class t17, class t18, class t19, class t20,
+            class t21, class t22, class t23, class t24, class t25,
+            class t26, class t27, class t28, class t29, class t30,
+            class t31, class t32>
+  inline void run(t1 *a1, t2 *a2, t3 *a3, t4 *a4, t5 *a5,
+                       t6 *a6, t7 *a7, t8 *a8, t9 *a9, t10 *a10,
+                       t11 *a11, t12 *a12, t13 *a13, t14 *a14, t15 *a15,
+                       t16 *a16, t17 *a17, t18 *a18, t19 *a19, t20 *a20,
+                       t21 *a21, t22 *a22, t23 *a23, t24 *a24, t25 *a25,
+                       t26 *a26, t27 *a27, t28 *a28, t29 *a29, t30 *a30,
+                       t31 *a31, t32 *a32) {
+    clear_args();
+    add_arg(a1); add_arg(a2); add_arg(a3); add_arg(a4); add_arg(a5);
+    add_arg(a6); add_arg(a7); add_arg(a8); add_arg(a9); add_arg(a10);
+    add_arg(a11); add_arg(a12); add_arg(a13); add_arg(a14); add_arg(a15);
+    add_arg(a16); add_arg(a17); add_arg(a18); add_arg(a19); add_arg(a20);
+    add_arg(a21); add_arg(a22); add_arg(a23); add_arg(a24); add_arg(a25);
+    add_arg(a26); add_arg(a27); add_arg(a28); add_arg(a29); add_arg(a30);
+    add_arg(a31); add_arg(a32);
     run();
   }

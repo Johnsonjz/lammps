@@ -1,0 +1,279 @@
+/* ----------------------------------------------------------------------
+   LAMMPS - Large-scale Atomic/Molecular Massively Parallel Simulator
+   https://www.lammps.org/, Sandia National Laboratories
+   LAMMPS development team: developers@lammps.org
+
+   Copyright (2003) Sandia Corporation.  Under the terms of Contract
+   DE-AC04-94AL85000 with Sandia Corporation, the U.S. Government retains
+   certain rights in this software.  This software is distributed under
+   the GNU General Public License.
+
+   See the README file in the top-level LAMMPS directory.
+------------------------------------------------------------------------- */
+
+/* ----------------------------------------------------------------------
+   Contributing author: Vsevolod Nikolskiy (HSE)
+   Soft-core variant: adds lam1 per-type-pair scaling
+------------------------------------------------------------------------- */
+
+#include "pair_lj_cut_tip4p_useries_soft_gpu.h"
+
+#include "angle.h"
+#include "atom.h"
+#include "bond.h"
+#include "comm.h"
+#include "domain.h"
+#include "error.h"
+#include "force.h"
+#include "gpu_extra.h"
+#include "math_const.h"
+#include "math_special.h"
+#include "kspace.h"
+#include "neigh_list.h"
+#include "neigh_request.h"
+#include "neighbor.h"
+#include "suffix.h"
+
+#include <cmath>
+
+using namespace LAMMPS_NS;
+using namespace MathConst;
+
+// External functions from cuda library for atom decomposition
+
+int ljtip4p_user_soft_gpu_init(const int ntypes, double **cutsq, double **host_lj1, double **host_lj2,
+                          double **host_lj3, double **host_lj4, double **offset,
+                          double *special_lj, const int nlocal, const int tH, const int tO,
+                          const double alpha, const double qdist, const int nall,
+                          const int max_nbors, const int maxspecial, const double cell_size,
+                          int &gpu_mode, FILE *screen, double **host_cut_ljsq,
+                          const double host_cut_coulsq, const double host_cut_coulsqplus,
+                          double *host_special_coul, const double qqrd2e,
+                          const double *host_taylor, const int host_taylor_terms,
+                          const double host_b, const double host_sigma,
+                          const int host_mmax, const double host_w0,
+                          int map_size, int max_same,
+                          double **host_lambda, const double host_nlambda,
+                          const double host_lam_charge);
+void ljtip4p_user_soft_gpu_clear();
+int **ljtip4p_user_soft_gpu_compute_n(const int ago, const int inum, const int nall, double **host_x,
+                                 int *host_type, double *sublo, double *subhi, tagint *tag,
+                                 int *map_array, int map_size, int *sametag, int max_same,
+                                 int **nspecial, tagint **special, const bool eflag,
+                                 const bool vflag, const bool eatom, const bool vatom,
+                                 int &host_start, int **ilist, int **jnum, const double cpu_time,
+                                 bool &success, double *host_q, double *boxlo, double *prd,
+                                 int *periodicity);
+void ljtip4p_user_soft_gpu_compute(const int ago, const int inum, const int nall, double **host_x,
+                              int *host_type, int *ilist, int *numj, int **firstneigh,
+                              const bool eflag, const bool vflag, const bool eatom,
+                              const bool vatom, int &host_start, const double cpu_time,
+                              bool &success, double *host_q, const int nlocal, double *boxlo,
+                              double *prd);
+double ljtip4p_user_soft_gpu_bytes();
+double ljtip4p_user_soft_gpu_get_du_dlam();
+void ljtip4p_user_soft_copy_molecule_data(int, tagint *, int *, int, int *, int, int);
+
+/* ---------------------------------------------------------------------- */
+
+PairLJCutTIP4PUserSoftGPU::PairLJCutTIP4PUserSoftGPU(LAMMPS *lmp) :
+    PairLJCutTIP4PUserSoft(lmp), gpu_mode(GPU_FORCE)
+{
+  respa_enable = 0;
+  reinitflag = 0;
+  cpu_time = 0.0;
+  du_dlam_accum = 0.0;
+  du_dlam_count = 0;
+  suffix_flag |= Suffix::GPU;
+  GPU_EXTRA::gpu_ready(lmp->modify, lmp->error);
+}
+
+/* ----------------------------------------------------------------------
+   free all arrays
+------------------------------------------------------------------------- */
+
+PairLJCutTIP4PUserSoftGPU::~PairLJCutTIP4PUserSoftGPU()
+{
+  // Write du_dlam average before cleanup
+  if (du_dlam_count > 0 && comm->me == 0) {
+    double avg = du_dlam_accum / (double)du_dlam_count;
+    const char *outfile = getenv("LAMMPS_DUDLAM_FILE");
+    if (outfile) {
+      FILE *fp = fopen(outfile, "w");
+      if (fp) { fprintf(fp, "%.10g\n", avg); fclose(fp); }
+    } else {
+      // Also print to screen for launch log capture
+      printf("DU_DLAM_AVG: %.10g (n=%ld)\n", avg, (long)du_dlam_count);
+      fflush(stdout);
+    }
+  }
+  ljtip4p_user_soft_gpu_clear();
+}
+
+/* ---------------------------------------------------------------------- */
+
+void PairLJCutTIP4PUserSoftGPU::compute(int eflag, int vflag)
+{
+  ev_init(eflag, vflag);
+  const int nall = atom->nlocal + atom->nghost;
+  const int ago = neighbor->ago;
+  int *map_array = atom->get_map_array();
+  const int map_size = atom->get_map_size();
+  const int max_same = atom->get_max_same();
+  int inum, host_start;
+
+  bool success = true;
+  int *ilist, *numneigh, **firstneigh;
+  if (gpu_mode != GPU_FORCE) {
+    double sublo[3], subhi[3];
+    if (domain->triclinic == 0) {
+      sublo[0] = domain->sublo[0];
+      sublo[1] = domain->sublo[1];
+      sublo[2] = domain->sublo[2];
+      subhi[0] = domain->subhi[0];
+      subhi[1] = domain->subhi[1];
+      subhi[2] = domain->subhi[2];
+    } else {
+      domain->bbox(domain->sublo_lamda, domain->subhi_lamda, sublo, subhi);
+    }
+    inum = atom->nlocal;
+    firstneigh = ljtip4p_user_soft_gpu_compute_n(
+        ago, inum, nall, atom->x, atom->type, sublo, subhi, atom->tag,
+        map_array, map_size, atom->sametag, max_same,
+        atom->nspecial, atom->special, eflag, vflag, eflag_atom, vflag_atom, host_start, &ilist,
+        &numneigh, cpu_time, success, atom->q, domain->boxlo, domain->prd, domain->periodicity);
+  } else {
+    inum = list->inum;
+    ilist = list->ilist;
+    numneigh = list->numneigh;
+    firstneigh = list->firstneigh;
+    ljtip4p_user_soft_copy_molecule_data(nall, atom->tag, map_array, map_size,
+                                    atom->sametag, max_same, ago);
+    ljtip4p_user_soft_gpu_compute(ago, inum, nall, atom->x, atom->type, ilist, numneigh,
+                             firstneigh, eflag, vflag, eflag_atom, vflag_atom, host_start,
+                             cpu_time, success, atom->q, atom->nlocal, domain->boxlo,
+                             domain->prd);
+  }
+  if (!success) error->one(FLERR, "Insufficient memory on accelerator");
+  if (atom->molecular != Atom::ATOMIC && ago == 0) neighbor->build_topology();
+
+  // Accumulate dU/dλ (soft-core corrected) from GPU
+  du_dlam_accum += ljtip4p_user_soft_gpu_get_du_dlam();
+  du_dlam_count++;
+}
+
+/* ----------------------------------------------------------------------
+   init specific to this pair style
+------------------------------------------------------------------------- */
+
+void PairLJCutTIP4PUserSoftGPU::init_style()
+{
+  cut_respa = nullptr;
+  if (atom->tag_enable == 0)
+    error->all(FLERR, "Pair style lj/cut/tip4p/user/soft/gpu requires atom IDs");
+  if (!force->newton_pair)
+    error->all(FLERR, "Pair style lj/cut/tip4p/user/soft/gpu requires newton pair on");
+  if (!atom->q_flag)
+    error->all(FLERR, "Pair style lj/cut/tip4p/user/soft/gpu requires atom attribute q");
+  if (force->bond == nullptr) error->all(FLERR, "Must use a bond style with TIP4P potential");
+  if (force->angle == nullptr) error->all(FLERR, "Must use an angle style with TIP4P potential");
+  if (atom->map_style == Atom::MAP_HASH)
+    error->all(FLERR,
+               "GPU-accelerated pair style lj/cut/tip4p/user/soft/gpu currently"
+               " requires an 'array' style atom map (atom_modify map array)");
+
+  if (ncoultablebits) {
+    if (comm->me == 0)
+      error->warning(FLERR,
+                     "Pair style lj/cut/tip4p/user/soft/gpu ignores Coulomb tables; forcing table 0");
+    ncoultablebits = 0;
+  }
+
+  double maxcut = -1.0;
+  for (int i = 1; i <= atom->ntypes; i++) {
+    for (int j = i; j <= atom->ntypes; j++) {
+      if (setflag[i][j] != 0 || (setflag[i][i] != 0 && setflag[j][j] != 0)) {
+        double cut = init_one(i, j);
+        cut *= cut;
+        if (cut > maxcut) maxcut = cut;
+        cutsq[i][j] = cutsq[j][i] = cut;
+      } else {
+        cutsq[i][j] = cutsq[j][i] = 0.0;
+      }
+    }
+  }
+
+  // set alpha parameter and TIP4P reach
+  const double theta = force->angle->equilibrium_angle(typeA);
+  const double blen = force->bond->equilibrium_distance(typeB);
+  alpha = qdist / (cos(0.5 * theta) * blen);
+
+  cut_coulsq = cut_coul * cut_coul;
+  const double cut_coulplus = cut_coul + qdist + blen;
+  const double cut_coulsqplus = cut_coulplus * cut_coulplus;
+
+  double cell_size = sqrt(maxcut) + neighbor->skin;
+  if (maxcut < cut_coulsqplus) cell_size = cut_coulplus + neighbor->skin;
+  if (comm->get_comm_cutoff() < cell_size) {
+    if (comm->me == 0)
+      error->warning(FLERR, "Increasing communication cutoff to {:.8} for TIP4P GPU style",
+                     cell_size);
+    comm->cutghostuser = cell_size;
+  }
+
+  // Rebuild user-series coefficients on this style just like CPU init_style().
+  r0 = cut_coul / Sigma;
+  w0 = Compute_W01(r0, b);
+  for (int i = 0; i < Mmax; i++) {
+    BL[i] = pow(b, i);
+    const double inv_b = 1.0 / BL[i];
+    BL3INV[i] = inv_b * inv_b * inv_b;
+    BL2SIGMA2INV[i] = 1.0 / (2.0 * Sigma * Sigma * BL[i] * BL[i]);
+  }
+  BL3INV[0] = w0;
+  coef = log(b) / (Sigma * Sigma * sqrt(2 * MY_PI * Sigma * Sigma));
+  TaylorTerms = 6;
+  for (int i = 0; i < TaylorTerms; i++) {
+    double sumsum = 0.0;
+    for (int j = 0; j < Mmax; j++) {
+      sumsum += BL3INV[j] * (1.0 / MathSpecial::factorial(i + 0.0)) * pow(BL2SIGMA2INV[j], i + 0.0);
+    }
+    TaylorCoeff[i] = pow(-1.0, i + 1.0) * 2.0 * coef * sumsum;
+  }
+
+  int maxspecial = 0;
+  if (atom->molecular != Atom::ATOMIC) maxspecial = atom->maxspecial;
+
+  // Extract charge-scaling lambda (used for ∂U/∂λ in Coulomb)
+  // lambda[i][j] may be 0 for O-O/O-H; use max across all type pairs
+  double lam_charge = 0.0;
+  for (int i = 1; i <= atom->ntypes; i++)
+    for (int j = 1; j <= atom->ntypes; j++)
+      if (setflag[i][j] && lambda[i] && lambda[i][j] > lam_charge)
+        lam_charge = lambda[i][j];
+  if (lam_charge <= 0.0) lam_charge = 1.0;  // fallback: no scaling
+
+  const int mnf = static_cast<int>(5e-2 * neighbor->oneatom);
+  int success = ljtip4p_user_soft_gpu_init(
+      atom->ntypes + 1, cutsq, lj1, lj2, lj3, lj4, offset, force->special_lj, atom->nlocal,
+      typeH, typeO, alpha, qdist, atom->nlocal + atom->nghost, mnf, maxspecial, cell_size,
+      gpu_mode, screen, cut_ljsq, cut_coulsq, cut_coulsqplus, force->special_coul,
+      force->qqrd2e, TaylorCoeff, TaylorTerms, b, Sigma, Mmax, w0, atom->get_map_size(),
+      atom->get_max_same(), lambda, nlambda, lam_charge);
+  GPU_EXTRA::check_flag(success, error, world);
+
+  if (gpu_mode == GPU_FORCE) {
+    auto *req = neighbor->add_request(this, NeighConst::REQ_FULL);
+    req->set_cutoff(cut_coulplus + neighbor->skin);
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+
+double PairLJCutTIP4PUserSoftGPU::memory_usage()
+{
+  double bytes = PairLJCutTIP4PUserSoft::memory_usage();
+  return bytes + ljtip4p_user_soft_gpu_bytes();
+}
+
+/* ---------------------------------------------------------------------- */
